@@ -1,0 +1,99 @@
+:root {
+  --bg: #f6f3ec;
+  --surface: #ffffff;
+  --ink: #1f2a24;
+  --muted: #5d6660;
+  --line: #ddd6c6;
+  --accent: #2f5d46;
+  --accent-ink: #ffffff;
+  --gold: #b9862a;
+  --danger: #a33a2a;
+  --radius: 12px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141a17;
+    --surface: #1d2521;
+    --ink: #ece8de;
+    --muted: #a2aaa4;
+    --line: #34403a;
+    --accent: #7fb497;
+    --accent-ink: #10160f;
+    --gold: #d9a441;
+    --danger: #e07a68;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+#app { max-width: 720px; margin: 0 auto; padding: 0 16px 48px; }
+
+header.bar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 0; background: var(--bg); border-bottom: 1px solid var(--line);
+}
+header.bar h1 { flex: 1; font-size: 18px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+button, .button {
+  font: inherit; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 999px; padding: 8px 16px; min-height: 40px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+button.primary, .button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.ghost { background: transparent; border-color: transparent; }
+button.danger { color: var(--danger); }
+button:disabled { opacity: 0.5; cursor: default; }
+.wide { width: 100%; }
+
+input[type="text"], input[type="password"], textarea, select {
+  font: inherit; width: 100%; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+}
+textarea { resize: vertical; min-height: 44px; }
+textarea.code { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 280px; }
+label.field { display: block; margin: 12px 0; }
+label.field > span { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin: 12px 0; }
+.muted { color: var(--muted); font-size: 14px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.error { color: var(--danger); }
+.notice { border-left: 3px solid var(--gold); padding: 8px 12px; background: var(--surface); border-radius: 6px; margin: 12px 0; font-size: 14px; }
+
+.book { display: block; width: 100%; text-align: left; border-radius: var(--radius); padding: 14px; min-height: 0; }
+.book strong { display: block; }
+
+.tabs { display: flex; gap: 4px; margin: 12px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px; }
+.tabs button { flex: 1; border: 0; min-height: 36px; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.chat .q { font-weight: 600; margin-top: 20px; }
+.chat .a { white-space: pre-wrap; overflow-wrap: anywhere; }
+sup.cite button { min-height: 0; padding: 0 5px; font-size: 11px; border-radius: 6px; margin-left: 1px; vertical-align: super; line-height: 1.4; }
+.composer { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0 calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); margin-top: 16px; }
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+.chips button { white-space: nowrap; font-size: 14px; min-height: 32px; padding: 4px 12px; }
+
+.item { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: start; }
+.item input[type="checkbox"] { width: 22px; height: 22px; margin-top: 2px; }
+.item details summary { cursor: pointer; }
+.kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gold); }
+.item.dropped { opacity: 0.5; }
+
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 8px 0; }
+.progress > div { height: 100%; background: var(--accent); transition: width 0.2s; }
+
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); max-width: min(560px, calc(100vw - 32px)); padding: 16px; }
+dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--gold); white-space: pre-wrap; }
