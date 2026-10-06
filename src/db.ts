@@ -1,6 +1,6 @@
 // Minimal IndexedDB wrapper. Everything stays on the device.
 import type { Book } from "./book";
-import type { CatalogueItem, ChatTurn, SkillDraft } from "./types";
+import type { CatalogueItem, ChatTurn, PendingBatch, SkillDraft } from "./types";
 
 export interface BookState {
   id: string;
@@ -8,6 +8,8 @@ export interface BookState {
   thesis: string;
   catalogue: CatalogueItem[];
   skill: SkillDraft | null;
+  /** Economy-mode extraction waiting on the Batch API. */
+  pendingBatch?: PendingBatch | null;
 }
 
 const DB_NAME = "skillbook";

@@ -14,9 +14,22 @@ Live at **https://plykov.github.io/skillbook/** once Pages is enabled (see below
 
 - **No server.** Static files on GitHub Pages. Books, notes and skill drafts live in the browser's IndexedDB on your device.
 - **Your API key.** Paste an Anthropic API key in Settings. It's stored in this browser only and sent only to `api.anthropic.com`, using the SDK's browser mode. Use a key with a low spend limit.
-- **Whole book in context.** Claude's 1M-token context fits a typical book (80–250K tokens), so there's no vector index. Each chapter becomes a document block, and the book is prompt-cached so follow-up questions are cheap.
-- **Models.** Claude Opus 5.5 (default) or Claude Sonnet 5.5, with adaptive thinking. If a request is refused, the API retries it on Anthropic's default fallback model (`fallbacks: "default"`).
-- **Cost.** A 200K-token book costs roughly $1 to load, a few cents per follow-up question, and $2–3 for extraction plus the skill build on Opus 5.5. The app shows the cost of each call.
+- **Whole book in context.** Claude's 1M-token context fits a typical book (80–250K tokens), so there's no vector index. Each chapter becomes a citation-enabled document block.
+- **Models.** Claude Opus 5.5 (default) or Claude Sonnet 5.5, with adaptive thinking at high effort. If a request is refused, the API retries it on Anthropic's default fallback model (`fallbacks: "default"`).
+
+## Keeping token spend down
+
+The book is by far the largest input, so the app is built to send it at full price once per session:
+
+1. **One shared cached prefix.** Ask, Extract, Skill and Revise all start with the same tools, the same system prompt and the same book documents. The model, thinking and effort settings are identical too. Structured output uses strict tools rather than JSON output formats, because those would change the prefix and can't be combined with citations. Task instructions come after the book.
+2. **1-hour cache.** The book is cached for an hour, and every use restarts the clock. Reading answers or curating the catalogue between steps doesn't cost a re-send.
+3. **Only content is sent.** Index, bibliography, copyright, acknowledgements and similar sections are excluded by default. Change this under *Sections sent to Claude* on the book page.
+4. **No unnecessary full re-runs.**
+   - *Revise* sends the current skill plus your instruction and gets back only the changed parts.
+   - *Extract more* adds new items from one section instead of re-extracting the whole book.
+5. **Economy extraction (optional, Settings).** Runs Extract through the Message Batches API at 50% off, including cache reads and writes. Results usually arrive in minutes but can take up to 24 hours; you can close the app meanwhile. Refusal fallback isn't available in batch mode.
+
+Rough cost for a 200K-token book on Opus 5.5: the first call writes the book to the cache (about $1.60). Each later call within the hour re-reads it for about $0.04, plus its own output: around $0.03 per answer and $0.50 each for extraction and the skill build. Each call shows its token use and cost, including how much was read from the cache.
 
 ## Limits (v0.1)
 

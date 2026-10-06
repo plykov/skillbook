@@ -1,9 +1,24 @@
 import { registerSW } from "virtual:pwa-register";
 import "./style.css";
-import { estimateTokens, type Book } from "./book";
-import { MODELS, ask, buildSkill, extractCatalogue, friendlyError, type ModelId, type Settings, type Usage } from "./claude";
+import { estimateTokens, suggestExcluded, type Book } from "./book";
+import {
+  MODELS,
+  ask,
+  buildSkill,
+  checkExtractBatch,
+  extractCatalogue,
+  friendlyError,
+  reviseSkill,
+  submitExtractBatch,
+  isTransient,
+  type ExtractResult,
+  type ModelId,
+  type Settings,
+  type Usage,
+} from "./claude";
 import { deleteBook, getBook, getState, listBooks, putBook, putState, type BookState } from "./db";
 import { slugify, skillZip, validateSkill } from "./skill";
+import { applyRevision, mergeItems } from "./tools";
 import type { ChatTurn, SkillDraft } from "./types";
 
 registerSW({ immediate: true });
@@ -37,9 +52,9 @@ const SETTINGS_KEY = "skillbook.settings";
 function loadSettings(): Settings {
   try {
     const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") as Partial<Settings>;
-    return { apiKey: s.apiKey ?? "", model: s.model && s.model in MODELS ? s.model : "claude-opus-5-5" };
+    return { apiKey: s.apiKey ?? "", model: s.model && s.model in MODELS ? s.model : "claude-opus-5-5", economy: !!s.economy };
   } catch {
-    return { apiKey: "", model: "claude-opus-5-5" };
+    return { apiKey: "", model: "claude-opus-5-5", economy: false };
   }
 }
 function saveSettings(s: Settings) {
@@ -90,6 +105,11 @@ async function go(next: View) {
 async function openBook(id: string) {
   const book = await getBook(id);
   if (!book) return;
+  // Books imported before section exclusion existed: apply the default suggestions once.
+  if (book.sections.every((sec) => sec.excluded === undefined)) {
+    for (const sec of book.sections) sec.excluded = suggestExcluded(sec.title);
+    await putBook(book);
+  }
   await go({ name: "book", book, state: await getState(id), tab: "ask" });
 }
 
@@ -98,16 +118,26 @@ async function run(label: string, fn: () => Promise<void>) {
   busy = label;
   lastError = "";
   render();
+  const started = Date.now();
+  const timer = window.setInterval(() => {
+    const el = app.querySelector("#elapsed");
+    const sec = Math.round((Date.now() - started) / 1000);
+    if (el) el.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  }, 1000);
   try {
     await fn();
   } catch (e) {
     console.error(e);
     lastError = friendlyError(e);
   } finally {
+    clearInterval(timer);
     busy = null;
     render();
   }
 }
+
+/** "Working… 0:42" line shown while a long call runs. */
+const working = (text: string) => h("p", { class: "muted" }, `${text} `, h("span", { id: "elapsed" }, "0:00"));
 
 function needKey(): boolean {
   if (settings.apiKey) return false;
@@ -177,6 +207,7 @@ async function importFile(file: File) {
 // ---------- settings ----------
 function renderSettings(): Child[] {
   const key = h("input", { type: "password", value: settings.apiKey, placeholder: "sk-ant-…", autocomplete: "off" });
+  const economy = h("input", { type: "checkbox", checked: settings.economy });
   const model = h(
     "select",
     {},
@@ -191,11 +222,17 @@ function renderSettings(): Child[] {
       h("p", { class: "muted" }, "Stored only in this browser on this device and sent only to api.anthropic.com. Create one at console.anthropic.com. Consider a key with a low spend limit."),
       h("label", { class: "field" }, h("span", {}, "Model"), model),
       h(
+        "label",
+        { class: "row field" },
+        economy,
+        h("span", {}, "Economy extraction: run Extract through the Batch API at half price. Results usually take minutes but can take hours; you can close the app meanwhile."),
+      ),
+      h(
         "button",
         {
           class: "primary",
           onclick: () => {
-            settings = { apiKey: key.value.trim(), model: model.value as ModelId };
+            settings = { apiKey: key.value.trim(), model: model.value as ModelId, economy: economy.checked };
             saveSettings(settings);
             void go({ name: "library" });
           },
@@ -213,7 +250,8 @@ function renderBook(v: BookView): Child[] {
     h("button", { role: "tab", "aria-selected": String(v.tab === t), onclick: () => ((v.tab = t), (lastError = ""), render()) }, label);
   return [
     h("header", { class: "bar" }, h("button", { class: "ghost", onclick: () => go({ name: "library" }) }, "‹"), h("h1", {}, v.book.title)),
-    h("p", { class: "muted" }, `${v.book.pageCount} pages · ${v.book.sections.length} sections · ~${fmtK(tokens)} tokens`),
+    h("p", { class: "muted" }, `${v.book.pageCount} pages · ${v.book.sections.length} sections · ~${fmtK(tokens)} tokens sent to Claude`),
+    renderSections(v),
     tokens > 900_000 && h("div", { class: "notice" }, "This book is close to or over Claude's 1M-token context window. Requests may fail."),
     h("nav", { class: "tabs", role: "tablist" }, tab("ask", "Ask"), tab("extract", "Extract"), tab("skill", "Skill")),
     ...(v.tab === "ask" ? renderAsk(v) : v.tab === "extract" ? renderExtract(v) : renderSkill(v)),
@@ -223,7 +261,7 @@ function renderBook(v: BookView): Child[] {
 // ----- ask -----
 const QUICK = [
   "What is the core argument, in five bullets?",
-  "List every framework the author teaches.",
+  "Explain the key terms in plain English.",
   "What should a reader do first, according to the book?",
   "Where is the author's reasoning weakest?",
 ];
@@ -269,9 +307,9 @@ function renderAsk(v: BookView): Child[] {
   };
   return [
     v.state.chat.length === 0 &&
-      h("p", { class: "muted" }, "Questions are answered from the book, with tappable page citations. The first question sends the whole book (cached for 5 minutes); follow-ups are much cheaper."),
+      h("p", { class: "muted" }, "Questions are answered from the book, with tappable page citations. The first call of a session sends the whole book; everything for the next hour (questions, Extract, Skill) re-reads it from the cache at a fraction of the price."),
     h("div", { class: "chat" }, v.state.chat.map((t) => [h("p", { class: "q" }, t.question), renderAnswer(t)])),
-    busy === "ask" && h("p", { class: "muted" }, "Claude is reading…"),
+    busy === "ask" && working("Claude is reading…"),
     errorLine(),
     usageLine(),
     h(
@@ -294,41 +332,160 @@ function renderAsk(v: BookView): Child[] {
   ];
 }
 
+// ----- sections -----
+function renderSections(v: BookView): Child {
+  const included = v.book.sections.filter((sec) => !sec.excluded).length;
+  return h(
+    "details",
+    { class: "card" },
+    h("summary", {}, `Sections sent to Claude: ${included} of ${v.book.sections.length}`),
+    h("p", { class: "muted" }, "Leave out pages that teach nothing (index, bibliography, copyright, acknowledgements) to cut every call's cost. Changing this restarts the conversation and the cache."),
+    v.book.sections.map((sec) =>
+      h(
+        "label",
+        { class: "row" },
+        h("input", {
+          type: "checkbox",
+          checked: !sec.excluded,
+          disabled: !!busy,
+          onchange: async (e: Event) => {
+            const box = e.target as HTMLInputElement;
+            if (v.state.chat.length && !confirm("Changing sections clears the current conversation. Continue?")) {
+              box.checked = !sec.excluded;
+              return;
+            }
+            sec.excluded = !box.checked;
+            v.state.chat = [];
+            await putBook(v.book);
+            await putState(v.state);
+            render();
+            app.querySelector("details")?.setAttribute("open", "");
+          },
+        }),
+        h("span", {}, sec.title, h("span", { class: "muted" }, ` · p. ${sec.firstPage} · ~${fmtK(Math.ceil(sec.text.length / 4))} tokens`)),
+      ),
+    ),
+  );
+}
+
 // ----- extract -----
 function costEstimate(v: BookView): string {
   const p = MODELS[settings.model];
   const t = estimateTokens(v.book);
-  return fmtUsd((t * p.cacheWrite + 30_000 * p.output) / 1e6);
+  const factor = settings.economy ? 0.5 : 1;
+  return `${fmtUsd(factor * (t * p.input * 2 + 30_000 * p.output) / 1e6)} if the book isn't cached yet, about ${fmtUsd(factor * (t * p.cacheRead + 30_000 * p.output) / 1e6)} if it is`;
+}
+
+function applyExtract(s: BookState, chapter: string, r: ExtractResult) {
+  if (chapter) {
+    s.catalogue = mergeItems(s.catalogue, r.items);
+  } else {
+    s.thesis = r.thesis;
+    s.catalogue = mergeItems([], r.items);
+  }
+  lastUsage = r.usage;
+}
+
+let batchPoll: number | undefined;
+let lastBatchCheck = 0;
+let batchStatus = "";
+
+/** While the Extract tab shows a pending batch, check it about once a minute. */
+function scheduleBatchCheck(v: BookView) {
+  clearTimeout(batchPoll);
+  if (!v.state.pendingBatch) return;
+  const wait = Math.max(0, lastBatchCheck + 60_000 - Date.now());
+  batchPoll = window.setTimeout(() => {
+    if (view === v && v.tab === "extract") void checkBatch(v);
+  }, wait);
+}
+
+async function checkBatch(v: BookView) {
+  const pending = v.state.pendingBatch;
+  if (!pending || busy) return;
+  lastBatchCheck = Date.now();
+  try {
+    const r = await checkExtractBatch(settings, pending.id);
+    if (r.done) {
+      applyExtract(v.state, pending.chapter, r);
+      v.state.pendingBatch = null;
+      batchStatus = "";
+      await putState(v.state);
+    } else {
+      batchStatus = `Status: ${r.status.replace("_", " ")} (checked ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}).`;
+    }
+  } catch (e) {
+    lastError = friendlyError(e);
+    // Connection problems are retried; anything else means this batch is unusable.
+    if (!isTransient(e)) {
+      v.state.pendingBatch = null;
+      await putState(v.state);
+    }
+  }
+  if (view === v) render();
 }
 
 function renderExtract(v: BookView): Child[] {
   const s = v.state;
   const kept = s.catalogue.filter((i) => i.keep).length;
-  const extract = () => {
+  const pending = s.pendingBatch;
+  const chapterSelect = h(
+    "select",
+    { "aria-label": "Section" },
+    v.book.sections.filter((sec) => !sec.excluded).map((sec) => h("option", { value: sec.title }, sec.title)),
+  );
+
+  const extract = (chapter: string) => {
     if (needKey()) return;
+    if (!chapter && s.catalogue.length && !confirm("Extract the whole book again? This replaces the current list.")) return;
     void run("extract", async () => {
-      const r = await extractCatalogue(settings, v.book, (chars) => {
-        const el = app.querySelector("#extract-progress");
-        if (el) el.textContent = `Writing the catalogue… ${fmtK(Math.round(chars / 4))} tokens so far`;
-      });
-      s.thesis = r.thesis;
-      s.catalogue = r.items;
-      lastUsage = r.usage;
+      if (settings.economy) {
+        const id = await submitExtractBatch(settings, v.book, chapter, s.catalogue);
+        s.pendingBatch = { id, chapter, submittedAt: Date.now() };
+        batchStatus = "Submitted. Checking about once a minute while this tab is open.";
+        lastBatchCheck = Date.now();
+        await putState(s);
+        return;
+      }
+      applyExtract(s, chapter, await extractCatalogue(settings, v.book, chapter, s.catalogue));
       await putState(s);
     });
   };
+  scheduleBatchCheck(v);
+
   return [
     h(
       "div",
       { class: "card" },
       h("p", {}, "Claude reads the whole book and lists the frameworks, processes, rules of thumb, checklists and pitfalls it teaches. Untick anything you don't want in the skill."),
-      h(
-        "button",
-        { class: "primary", disabled: !!busy, onclick: extract },
-        busy === "extract" ? "Extracting…" : s.catalogue.length ? "Extract again" : "Extract frameworks",
-      ),
-      h("p", { class: "muted" }, `One call, typically 1–4 minutes. Estimated ${costEstimate(v)} with ${MODELS[settings.model].label}. Keep the app open while it runs.`),
-      busy === "extract" && h("p", { class: "muted", id: "extract-progress" }, "Reading the book…"),
+      pending
+        ? [
+            h("p", {}, h("strong", {}, "Economy batch running"), pending.chapter ? ` for “${pending.chapter}”` : "", `, submitted ${new Date(pending.submittedAt).toLocaleString()}.`),
+            h("p", { class: "muted" }, batchStatus || "You can close the app; results are kept by Anthropic for 29 days."),
+            h("button", { disabled: !!busy, onclick: () => checkBatch(v) }, "Check now"),
+          ]
+        : [
+            h(
+              "button",
+              { class: "primary", disabled: !!busy, onclick: () => extract("") },
+              busy === "extract" ? "Extracting…" : s.catalogue.length ? "Extract whole book again" : "Extract frameworks",
+            ),
+            h(
+              "p",
+              { class: "muted" },
+              settings.economy
+                ? `Economy mode (Settings): half price, results in minutes to hours. Estimated ${costEstimate(v)}.`
+                : `Typically 1–4 minutes; keep the app open. Estimated ${costEstimate(v)}.`,
+            ),
+            busy === "extract" && working(settings.economy ? "Submitting…" : "Claude is reading the book…"),
+            s.catalogue.length > 0 &&
+              h(
+                "div",
+                {},
+                h("p", { class: "muted" }, "Missed something? Extract more from one section; only new items are added."),
+                h("div", { class: "row" }, h("div", { class: "spacer" }, chapterSelect), h("button", { disabled: !!busy, onclick: () => extract(chapterSelect.value) }, "Extract more")),
+              ),
+          ],
     ),
     errorLine(),
     usageLine(),
@@ -393,13 +550,26 @@ function renderSkill(v: BookView): Child[] {
 
   const build = () => {
     if (needKey()) return;
+    if (s.skill && !confirm("Rebuild the whole skill? For small changes, use Revise below; it's much cheaper.")) return;
     void run("skill", async () => {
-      const r = await buildSkill(settings, v.book, s.thesis, kept, focus.value, (chars) => {
-        const el = app.querySelector("#skill-progress");
-        if (el) el.textContent = `Writing the skill… ${fmtK(Math.round(chars / 4))} tokens so far`;
-      });
+      const r = await buildSkill(settings, v.book, s.thesis, kept, focus.value);
       const d = r.draft;
       d.name = slugify(d.name) || slugify(v.book.title) || "book-skill";
+      s.skill = d;
+      lastUsage = r.usage;
+      await putState(s);
+    });
+  };
+
+  const instruction = h("textarea", { rows: 2, placeholder: "e.g. “Add a scoring rubric to the workflow” or “Shorten the description”" });
+  const revise = () => {
+    const text = instruction.value.trim();
+    if (!text || !s.skill || needKey()) return;
+    const current = s.skill;
+    void run("revise", async () => {
+      const r = await reviseSkill(settings, v.book, current, text);
+      const d = applyRevision(current, r.revision);
+      d.name = slugify(d.name) || current.name;
       s.skill = d;
       lastUsage = r.usage;
       await putState(s);
@@ -415,10 +585,18 @@ function renderSkill(v: BookView): Child[] {
         : [
             h("p", {}, `Builds a claude.ai skill from the ${kept.length} kept items, using the book for detail.`),
             h("label", { class: "field" }, h("span", {}, "Focus"), focus),
-            h("button", { class: "primary", disabled: !!busy, onclick: build }, busy === "skill" ? "Building…" : s.skill ? "Rebuild skill" : "Build skill"),
-            busy === "skill" && h("p", { class: "muted", id: "skill-progress" }, "Reading the book…"),
+            h("button", { class: s.skill ? "" : "primary", disabled: !!busy, onclick: build }, busy === "skill" ? "Building…" : s.skill ? "Rebuild from scratch" : "Build skill"),
+            busy === "skill" && working("Claude is writing the skill…"),
           ],
     ),
+    s.skill &&
+      h(
+        "div",
+        { class: "card" },
+        h("label", { class: "field" }, h("span", {}, "Revise: describe the change and Claude edits only that part"), instruction),
+        h("button", { class: "primary", disabled: !!busy, onclick: revise }, busy === "revise" ? "Revising…" : "Revise"),
+        busy === "revise" && working("Claude is revising…"),
+      ),
     errorLine(),
     usageLine(),
   ];

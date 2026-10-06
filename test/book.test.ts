@@ -72,3 +72,20 @@ describe("buildSections", () => {
     expect(estimateTokens({ sections: [s] })).toBeGreaterThan(0);
   });
 });
+
+describe("section exclusion", () => {
+  it("suggests leaving out non-content sections only", async () => {
+    const { suggestExcluded, includedSections } = await import("../src/book");
+    for (const t of ["Index", "Bibliography", "Acknowledgments", "Acknowledgements", "About the Author", "Praise for $100M Offers", "Also by Alex", "Contents", "Copyright"])
+      expect(suggestExcluded(t), t).toBe(true);
+    for (const t of ["Introduction", "Indexing your offers", "The Value Equation", "References and referrals", "Notes on pricing", "Chapter 3: Contents of a Grand Slam Offer"])
+      expect(suggestExcluded(t), t).toBe(false);
+    const secs = buildSections(Array.from({ length: 30 }, (_, i) => `p${i}`), [
+      { title: "One", page: 1 },
+      { title: "Two", page: 10 },
+      { title: "Index", page: 25 },
+    ]);
+    expect(includedSections({ sections: secs }).map((s) => s.title)).toEqual(["One", "Two"]);
+    expect(estimateTokens({ sections: secs })).toBeLessThan(estimateTokens({ sections: secs.map((s) => ({ ...s, excluded: false })) }));
+  });
+});

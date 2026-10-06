@@ -8,6 +8,8 @@ export interface Section {
   text: string;
   /** Char offset in `text` where each page starts; pageStarts[0] === 0. */
   pageStarts: number[];
+  /** Left out of everything sent to Claude (index, bibliography, …). */
+  excluded?: boolean;
 }
 
 export interface Book {
@@ -108,8 +110,22 @@ export function buildSections(pageTexts: string[], outline: OutlineEntry[]): Sec
       pageStarts.push(text.length);
       text += pageTexts[p - 1];
     }
-    return { title: s.title, firstPage: s.page, text, pageStarts };
+    return { title: s.title, firstPage: s.page, text, pageStarts, excluded: suggestExcluded(s.title) };
   });
+}
+
+// Whole-title matches, plus a few prefixes ("Praise for …", "Also by …").
+const NON_CONTENT =
+  /^((index|bibliography|works cited|references|copyright( page)?|acknowledge?ments?|(table of )?contents|permissions|colophon)\s*$|(about the authors?|also by|other books by|praise for)\b)/i;
+
+/** Sections that carry no teachable content and are left out by default. */
+export function suggestExcluded(title: string): boolean {
+  return NON_CONTENT.test(title.replace(/^[\s\d.:–-]+/, "").trim());
+}
+
+/** Sections that are sent to Claude, in book order. */
+export function includedSections(book: Pick<Book, "sections">): Section[] {
+  return book.sections.filter((s) => !s.excluded && s.text.trim().length > 0);
 }
 
 function cleanOutline(outline: OutlineEntry[], pageCount: number): OutlineEntry[] {
@@ -150,8 +166,8 @@ export function pageLabel(section: Section, start: number, end: number): string 
   return a === b ? `p. ${a}` : `pp. ${a}–${b}`;
 }
 
-/** Rough token estimate for English prose (~4 chars per token). */
+/** Rough token estimate of the included sections (~4 chars per token of English prose). */
 export function estimateTokens(book: Pick<Book, "sections">): number {
-  const chars = book.sections.reduce((sum, s) => sum + s.text.length + s.title.length, 0);
+  const chars = includedSections(book).reduce((sum, s) => sum + s.text.length + s.title.length, 0);
   return Math.ceil(chars / 4);
 }

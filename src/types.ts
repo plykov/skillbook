@@ -48,3 +48,19 @@ export interface SkillDraft {
   body: string;
   references: SkillReference[];
 }
+
+/** Partial update to a skill draft; empty strings mean "unchanged". */
+export interface SkillRevision {
+  name: string;
+  description: string;
+  body: string;
+  upsert_references: SkillReference[];
+  remove_references: string[];
+}
+
+export interface PendingBatch {
+  id: string;
+  /** Section title when extracting more from one chapter; empty for the whole book. */
+  chapter: string;
+  submittedAt: number;
+}
