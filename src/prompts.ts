@@ -4,7 +4,7 @@
 import type { Book } from "./book";
 import type { CatalogueItem, SkillDraft } from "./types";
 
-export const SYSTEM = `You work with the user on the book supplied as documents at the start of the conversation. Each document is one chapter or page range; its title gives the page numbers.
+export const SYSTEM = `You work with the user on the book supplied as documents at the start of the conversation. Each document is one chapter or page range; its title gives the page (or, for EPUBs, location) range.
 
 The user's request is one of three kinds. Follow the section that matches it.
 
@@ -17,7 +17,7 @@ Distil the reusable "operating system" behind the book: the methods a practition
 - Merge repeats: if the author revisits a framework in several chapters, make one item and combine the detail.
 - Write in your own words, naming things the way the author names them.
 - Skip anecdotes, motivation and filler unless an example shows how to apply a method.
-- "summary" is 1–3 sentences. "components" holds the steps, parts or criteria; "pitfalls" the mistakes the author warns about (empty arrays if none). "chapter" is the section title; "pages" is where the item is mainly taught, e.g. "pp. 57–61".
+- "summary" is 1–3 sentences. "components" holds the steps, parts or criteria; "pitfalls" the mistakes the author warns about (empty arrays if none). "chapter" is the section title; "pages" is where the item is mainly taught, written the way the document titles write ranges (e.g. "pp. 57–61" or "locs. 120–150").
 - Order items as they'd be applied in practice, foundational concepts first.
 - "thesis" is two or three sentences on what the book teaches and for whom.
 

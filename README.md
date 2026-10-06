@@ -1,8 +1,8 @@
 # Skillbook
 
-A phone-first PWA that turns a PDF book into a **claude.ai skill**:
+A phone-first PWA that turns a PDF or EPUB book into a **claude.ai skill**:
 
-1. **Import** a PDF on your phone. The text is extracted on the device with pdf.js. The PDF itself never leaves the phone.
+1. **Import** a PDF or EPUB on your phone. The text is extracted on the device (pdf.js for PDFs, a built-in parser for EPUBs). The file itself never leaves the phone.
 2. **Ask** the book questions. Answers come from Claude with tappable page citations.
 3. **Extract** the frameworks, processes, heuristics, checklists and pitfalls the book teaches, then untick anything you don't want.
 4. **Build** a skill (`SKILL.md` plus `references/*.md`), edit it in place, and download or share it as a `.zip`.
@@ -33,7 +33,9 @@ Rough cost for a 200K-token book on Opus 5.5: the first call writes the book to 
 
 ## Limits (v0.1)
 
-- Text-based PDFs only. Scanned PDFs need OCR first (e.g. `ocrmypdf`).
+- PDF and EPUB, DRM-free. Scanned PDFs need OCR first (e.g. `ocrmypdf`). DRM-protected EPUBs are refused.
+- MOBI/AZW isn't read directly: convert to EPUB first, e.g. `ebook-convert book.mobi book.epub` (Calibre).
+- EPUBs have no pages, so citations point to *locations* (`loc. 12`): consecutive slices of up to about 2,000 characters, counted from the start of the book. Chapters come from the EPUB's table of contents (EPUB 3 nav or EPUB 2 NCX), including books that keep many chapters in one HTML file. Footnote call-outs are dropped and the footnote text is kept.
 - English books.
 - Keep the app in the foreground during extraction and skill building (1–4 minutes). Phones may kill background network requests.
 - Skills generated from a book are for personal use. They paraphrase methods and cap verbatim quotes, but sharing them is your call about the author's rights.
@@ -51,8 +53,10 @@ Source layout:
 
 | File | Role |
 |------|------|
+| `src/import.ts` | Picks the importer by file content (PDF, EPUB) |
 | `src/pdf.ts` | PDF → text per page, outline → chapters (pdf.js, on device) |
-| `src/book.ts` | Header/footer stripping, hyphenation repair, sectioning, citation → page mapping |
+| `src/epub.ts` | EPUB → text, table of contents → chapters, locations; DRM check |
+| `src/book.ts` | Header/footer stripping, hyphenation repair, sectioning, citation → page/location mapping |
 | `src/claude.ts` | Claude API calls: cited chat, structured extraction, skill generation |
 | `src/prompts.ts` | System prompts and JSON schemas |
 | `src/skill.ts` | Skill validation, `SKILL.md` frontmatter, zip packaging |

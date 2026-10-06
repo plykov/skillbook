@@ -13,7 +13,7 @@ import type {
   BetaMessageParam,
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
-import { includedSections, pageLabel, type Book } from "./book";
+import { includedSections, locatorOf, pageLabel, type Book } from "./book";
 import { SYSTEM, extractTask, reviseTask, skillTask } from "./prompts";
 import { TOOLS, parseCatalogue, parseRevision, parseSkill, type ToolName } from "./tools";
 import type { CatalogueItem, ChatTurn, Citation, SkillDraft, SkillRevision } from "./types";
@@ -53,7 +53,7 @@ function bookDocuments(book: Book): BetaContentBlockParam[] {
   return secs.map((s, i) => ({
     type: "document" as const,
     source: { type: "text" as const, media_type: "text/plain" as const, data: s.text },
-    title: `${s.title} (${pageLabel(s, 0, s.text.length)})`,
+    title: `${s.title} (${pageLabel(s, 0, s.text.length, locatorOf(book))})`,
     ...(i === 0 ? { context: `Book: ${book.title}${book.author ? ` by ${book.author}` : ""}` } : {}),
     citations: { enabled: true },
     ...(i === secs.length - 1 ? { cache_control: { type: "ephemeral" as const, ttl: "1h" as const } } : {}),
@@ -162,7 +162,7 @@ export async function ask(
       if (idx === undefined) {
         idx = citations.length;
         keyToIndex.set(key, idx);
-        citations.push({ label: pageLabel(sec, c.start_char_index, c.end_char_index), section: sec.title, quote: c.cited_text });
+        citations.push({ label: pageLabel(sec, c.start_char_index, c.end_char_index, locatorOf(book)), section: sec.title, quote: c.cited_text });
       }
       if (!cites.includes(idx)) cites.push(idx);
     }

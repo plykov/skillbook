@@ -12,11 +12,17 @@ export interface Section {
   excluded?: boolean;
 }
 
+/** How a book is located: PDF pages, or EPUB "locations" (fixed ~2,000-character slices of the text). */
+export type Locator = "page" | "loc";
+
 export interface Book {
   id: string;
+  /** Missing on books imported before EPUB support (all PDFs). */
+  format?: "pdf" | "epub";
   title: string;
   author: string;
   fileName: string;
+  /** Pages (PDF) or locations (EPUB). */
   pageCount: number;
   importedAt: number;
   sections: Section[];
@@ -87,14 +93,14 @@ const MAX_SECTIONS = 60;
  * Splits page texts into sections using the PDF outline when it is usable,
  * otherwise into fixed-size page ranges.
  */
-export function buildSections(pageTexts: string[], outline: OutlineEntry[]): Section[] {
+export function buildSections(pageTexts: string[], outline: OutlineEntry[], locator: Locator = "page"): Section[] {
   const n = pageTexts.length;
   let starts = cleanOutline(outline, n);
   if (starts.length < 3) {
     starts = [];
     for (let p = 1; p <= n; p += FALLBACK_PAGES_PER_SECTION) {
       const end = Math.min(n, p + FALLBACK_PAGES_PER_SECTION - 1);
-      starts.push({ title: `Pages ${p}–${end}`, page: p });
+      starts.push({ title: `${locator === "loc" ? "Locations" : "Pages"} ${p}–${end}`, page: p });
     }
   } else if (starts[0].page > 1) {
     starts.unshift({ title: "Front matter", page: 1 });
@@ -160,11 +166,18 @@ export function pageAt(section: Section, charIndex: number): number {
   return section.firstPage + lo;
 }
 
-export function pageLabel(section: Section, start: number, end: number): string {
+export const locatorOf = (book: Pick<Book, "format">): Locator => (book.format === "epub" ? "loc" : "page");
+
+/** "p. 3" / "pp. 3–5" for PDFs, "loc. 3" / "locs. 3–5" for EPUBs. */
+export function pageLabel(section: Section, start: number, end: number, locator: Locator = "page"): string {
   const a = pageAt(section, start);
   const b = pageAt(section, Math.max(start, end - 1));
-  return a === b ? `p. ${a}` : `pp. ${a}–${b}`;
+  const [one, many] = locator === "loc" ? ["loc.", "locs."] : ["p.", "pp."];
+  return a === b ? `${one} ${a}` : `${many} ${a}–${b}`;
 }
+
+/** Plural noun for UI copy: "pages" or "locations". */
+export const unitNoun = (book: Pick<Book, "format">) => (book.format === "epub" ? "locations" : "pages");
 
 /** Rough token estimate of the included sections (~4 chars per token of English prose). */
 export function estimateTokens(book: Pick<Book, "sections">): number {

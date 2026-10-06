@@ -1,6 +1,6 @@
 import { registerSW } from "virtual:pwa-register";
 import "./style.css";
-import { estimateTokens, suggestExcluded, type Book } from "./book";
+import { estimateTokens, locatorOf, suggestExcluded, unitNoun, type Book } from "./book";
 import {
   MODELS,
   ask,
@@ -17,6 +17,7 @@ import {
   type Usage,
 } from "./claude";
 import { deleteBook, getBook, getState, listBooks, putBook, putState, type BookState } from "./db";
+import { importBook } from "./import";
 import { slugify, skillZip, validateSkill } from "./skill";
 import { applyRevision, mergeItems } from "./tools";
 import type { ChatTurn, SkillDraft } from "./types";
@@ -153,7 +154,7 @@ let importProgress = 0;
 function renderLibrary(): Child[] {
   const fileInput = h("input", {
     type: "file",
-    accept: "application/pdf,.pdf",
+    accept: ".pdf,.epub,application/pdf,application/epub+zip",
     hidden: true,
     onchange: (e: Event) => {
       const file = (e.target as HTMLInputElement).files?.[0];
@@ -166,10 +167,10 @@ function renderLibrary(): Child[] {
     h(
       "div",
       { class: "card" },
-      h("button", { class: "primary wide", disabled: !!busy, onclick: () => fileInput.click() }, busy === "import" ? "Reading PDF…" : "Import a PDF book"),
+      h("button", { class: "primary wide", disabled: !!busy, onclick: () => fileInput.click() }, busy === "import" ? "Reading book…" : "Import a book (PDF or EPUB)"),
       busy === "import" && h("div", { class: "progress" }, h("div", { style: `width:${Math.round(importProgress * 100)}%` })),
       fileInput,
-      h("p", { class: "muted" }, "Text-based PDFs only (scanned books need OCR first). English books work best."),
+      h("p", { class: "muted" }, "PDF or EPUB, DRM-free. Scanned PDFs need OCR first; for MOBI/AZW, convert to EPUB with Calibre. English books work best."),
     ),
     errorLine(),
     ...books
@@ -179,7 +180,7 @@ function renderLibrary(): Child[] {
           "button",
           { class: "card book", onclick: () => openBook(b.id) },
           h("strong", {}, b.title),
-          h("span", { class: "muted" }, [b.author, `${b.pageCount} pages`, `${b.sections.length} sections`, `~${fmtK(estimateTokens(b))} tokens`].filter(Boolean).join(" · ")),
+          h("span", { class: "muted" }, [b.author, `${b.pageCount} ${unitNoun(b)}`, `${b.sections.length} sections`, `~${fmtK(estimateTokens(b))} tokens`].filter(Boolean).join(" · ")),
         ),
       ),
   ];
@@ -188,8 +189,7 @@ function renderLibrary(): Child[] {
 async function importFile(file: File) {
   importProgress = 0;
   await run("import", async () => {
-    const { importPdf } = await import("./pdf");
-    const book = await importPdf(file, (done, total) => {
+    const book = await importBook(file, (done, total) => {
       importProgress = done / total;
       const bar = app.querySelector<HTMLDivElement>(".progress > div");
       if (bar) bar.style.width = `${Math.round(importProgress * 100)}%`;
@@ -250,7 +250,7 @@ function renderBook(v: BookView): Child[] {
     h("button", { role: "tab", "aria-selected": String(v.tab === t), onclick: () => ((v.tab = t), (lastError = ""), render()) }, label);
   return [
     h("header", { class: "bar" }, h("button", { class: "ghost", onclick: () => go({ name: "library" }) }, "‹"), h("h1", {}, v.book.title)),
-    h("p", { class: "muted" }, `${v.book.pageCount} pages · ${v.book.sections.length} sections · ~${fmtK(tokens)} tokens sent to Claude`),
+    h("p", { class: "muted" }, `${v.book.pageCount} ${unitNoun(v.book)} · ${v.book.sections.length} sections · ~${fmtK(tokens)} tokens sent to Claude`),
     renderSections(v),
     tokens > 900_000 && h("div", { class: "notice" }, "This book is close to or over Claude's 1M-token context window. Requests may fail."),
     h("nav", { class: "tabs", role: "tablist" }, tab("ask", "Ask"), tab("extract", "Extract"), tab("skill", "Skill")),
@@ -362,7 +362,7 @@ function renderSections(v: BookView): Child {
             app.querySelector("details")?.setAttribute("open", "");
           },
         }),
-        h("span", {}, sec.title, h("span", { class: "muted" }, ` · p. ${sec.firstPage} · ~${fmtK(Math.ceil(sec.text.length / 4))} tokens`)),
+        h("span", {}, sec.title, h("span", { class: "muted" }, ` · ${locatorOf(v.book) === "loc" ? "loc." : "p."} ${sec.firstPage} · ~${fmtK(Math.ceil(sec.text.length / 4))} tokens`)),
       ),
     ),
   );
