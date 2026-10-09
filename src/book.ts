@@ -12,13 +12,15 @@ export interface Section {
   excluded?: boolean;
 }
 
-/** How a book is located: PDF pages, or EPUB "locations" (fixed ~2,000-character slices of the text). */
+/** How a book is located: PDF pages, or "locations" (fixed ~2,000-character slices of the text) for everything else. */
 export type Locator = "page" | "loc";
 
 export interface Book {
   id: string;
   /** Missing on books imported before EPUB support (all PDFs). */
-  format?: "pdf" | "epub";
+  format?: "pdf" | "epub" | "web" | "text";
+  /** Where a web book was imported from. */
+  sourceUrl?: string;
   title: string;
   author: string;
   fileName: string;
@@ -166,7 +168,7 @@ export function pageAt(section: Section, charIndex: number): number {
   return section.firstPage + lo;
 }
 
-export const locatorOf = (book: Pick<Book, "format">): Locator => (book.format === "epub" ? "loc" : "page");
+export const locatorOf = (book: Pick<Book, "format">): Locator => (book.format && book.format !== "pdf" ? "loc" : "page");
 
 /** "p. 3" / "pp. 3–5" for PDFs, "loc. 3" / "locs. 3–5" for EPUBs. */
 export function pageLabel(section: Section, start: number, end: number, locator: Locator = "page"): string {
@@ -177,10 +179,54 @@ export function pageLabel(section: Section, start: number, end: number, locator:
 }
 
 /** Plural noun for UI copy: "pages" or "locations". */
-export const unitNoun = (book: Pick<Book, "format">) => (book.format === "epub" ? "locations" : "pages");
+export const unitNoun = (book: Pick<Book, "format">) => (locatorOf(book) === "loc" ? "locations" : "pages");
+
+/** "1 section", "3 sections". */
+export const count = (n: number, plural: string) => `${n} ${n === 1 ? plural.replace(/s$/, "") : plural}`;
 
 /** Rough token estimate of the included sections (~4 chars per token of English prose). */
 export function estimateTokens(book: Pick<Book, "sections">): number {
   const chars = includedSections(book).reduce((sum, s) => sum + s.text.length + s.title.length, 0);
   return Math.ceil(chars / 4);
+}
+
+export const LOCATION_CHARS = 2000;
+
+/** Splits text into pages of up to ~`size` characters on paragraph boundaries (long paragraphs split at spaces). */
+export function chunkPages(text: string, size = LOCATION_CHARS): string[] {
+  const pages: string[] = [];
+  let cur = "";
+  const flush = () => {
+    if (cur.trim()) pages.push(cur.trim());
+    cur = "";
+  };
+  for (let para of text.split(/\n{2,}/)) {
+    para = para.trim();
+    if (!para) continue;
+    while (para.length > size * 1.5) {
+      let cut = para.lastIndexOf(" ", size);
+      if (cut < size / 2) cut = size;
+      if (cur) flush();
+      pages.push(para.slice(0, cut).trim());
+      para = para.slice(cut).trim();
+    }
+    if (cur && cur.length + para.length > size) flush();
+    cur += (cur ? "\n\n" : "") + para;
+    if (cur.length >= size) flush();
+  }
+  flush();
+  return pages;
+}
+
+/** Cuts titled groups of text into locations; the outline points at each group's first location. Empty groups are dropped. */
+export function layoutGroups(groups: { title: string; text: string }[], size = LOCATION_CHARS): { pages: string[]; outline: OutlineEntry[] } {
+  const pages: string[] = [];
+  const outline: OutlineEntry[] = [];
+  for (const g of groups) {
+    const ps = chunkPages(g.text, size);
+    if (ps.length === 0) continue;
+    outline.push({ title: g.title, page: pages.length + 1 });
+    pages.push(...ps);
+  }
+  return { pages, outline };
 }

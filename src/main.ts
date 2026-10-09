@@ -1,6 +1,6 @@
 import { registerSW } from "virtual:pwa-register";
 import "./style.css";
-import { estimateTokens, locatorOf, suggestExcluded, unitNoun, type Book } from "./book";
+import { count, estimateTokens, locatorOf, suggestExcluded, unitNoun, type Book } from "./book";
 import {
   MODELS,
   ask,
@@ -17,7 +17,7 @@ import {
   type Usage,
 } from "./claude";
 import { deleteBook, getBook, getState, listBooks, putBook, putState, type BookState } from "./db";
-import { importBook } from "./import";
+import { importBook, importUrl } from "./import";
 import { slugify, skillZip, validateSkill } from "./skill";
 import { applyRevision, mergeItems } from "./tools";
 import type { ChatTurn, SkillDraft } from "./types";
@@ -53,9 +53,9 @@ const SETTINGS_KEY = "skillbook.settings";
 function loadSettings(): Settings {
   try {
     const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") as Partial<Settings>;
-    return { apiKey: s.apiKey ?? "", model: s.model && s.model in MODELS ? s.model : "claude-opus-5-5", economy: !!s.economy };
+    return { apiKey: s.apiKey ?? "", model: s.model && s.model in MODELS ? s.model : "claude-opus-5-5", economy: !!s.economy, relayUrl: s.relayUrl ?? "" };
   } catch {
-    return { apiKey: "", model: "claude-opus-5-5", economy: false };
+    return { apiKey: "", model: "claude-opus-5-5", economy: false, relayUrl: "" };
   }
 }
 function saveSettings(s: Settings) {
@@ -97,6 +97,7 @@ function render() {
 }
 
 async function go(next: View) {
+  if (next.name !== "book" || (view.name === "book" && view.book.id !== next.book.id)) importNotes = [];
   view = next;
   lastError = "";
   render();
@@ -154,23 +155,35 @@ let importProgress = 0;
 function renderLibrary(): Child[] {
   const fileInput = h("input", {
     type: "file",
-    accept: ".pdf,.epub,application/pdf,application/epub+zip",
+    accept: ".pdf,.epub,.md,.markdown,.txt,application/pdf,application/epub+zip,text/markdown,text/plain",
     hidden: true,
     onchange: (e: Event) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) void importFile(file);
     },
   });
+  const link = h("input", { type: "text", inputMode: "url", placeholder: "https://library.example.com/9/book-name", autocomplete: "off", "aria-label": "Web book link" });
   return [
     h("header", { class: "bar" }, h("h1", {}, "Skillbook"), h("button", { class: "ghost", onclick: () => go({ name: "settings" }), "aria-label": "Settings" }, "⚙︎ Settings")),
     !settings.apiKey && h("div", { class: "notice" }, "Add your Anthropic API key in Settings. Books are read on this phone; only the extracted text is sent to Claude when you ask a question."),
     h(
       "div",
       { class: "card" },
-      h("button", { class: "primary wide", disabled: !!busy, onclick: () => fileInput.click() }, busy === "import" ? "Reading book…" : "Import a book (PDF or EPUB)"),
+      h("button", { class: "primary wide", disabled: !!busy, onclick: () => fileInput.click() }, busy === "import" ? "Importing…" : "Import a file (PDF, EPUB, Markdown, text)"),
       busy === "import" && h("div", { class: "progress" }, h("div", { style: `width:${Math.round(importProgress * 100)}%` })),
       fileInput,
-      h("p", { class: "muted" }, "PDF or EPUB, DRM-free. Scanned PDFs need OCR first; for MOBI/AZW, convert to EPUB with Calibre. English books work best."),
+      h("p", { class: "muted" }, "DRM-free files only. Scanned PDFs need OCR first; for MOBI/AZW, convert to EPUB with Calibre. English books work best."),
+    ),
+    h(
+      "div",
+      { class: "card" },
+      h("label", { class: "field" }, h("span", {}, "Or import a web book from a link"), link),
+      h("button", { class: "wide", disabled: !!busy, onclick: () => void importLink(link.value) }, "Import from link"),
+      h(
+        "p",
+        { class: "muted" },
+        "Works with Writebook libraries (multi-page online books) and single web pages. Pages are fetched through your own relay (set it up in Settings). Only import what you have the right to read, and keep skills made from it to your own use unless the author's licence says otherwise.",
+      ),
     ),
     errorLine(),
     ...books
@@ -180,34 +193,50 @@ function renderLibrary(): Child[] {
           "button",
           { class: "card book", onclick: () => openBook(b.id) },
           h("strong", {}, b.title),
-          h("span", { class: "muted" }, [b.author, `${b.pageCount} ${unitNoun(b)}`, `${b.sections.length} sections`, `~${fmtK(estimateTokens(b))} tokens`].filter(Boolean).join(" · ")),
+          h("span", { class: "muted" }, [b.author, count(b.pageCount, unitNoun(b)), count(b.sections.length, "sections"), `~${fmtK(estimateTokens(b))} tokens`].filter(Boolean).join(" · ")),
         ),
       ),
   ];
 }
 
+let importNotes: string[] = [];
+
+async function finishImport({ book, notes }: { book: Book; notes: string[] }) {
+  if (book.emptyPages > book.pageCount * 0.5) {
+    throw new Error(`Most pages (${book.emptyPages} of ${book.pageCount}) have no text layer. This looks like a scanned PDF; run it through OCR first.`);
+  }
+  await putBook(book);
+  void navigator.storage?.persist?.();
+  books = await listBooks();
+  importNotes = notes;
+  view = { name: "book", book, state: await getState(book.id), tab: "ask" };
+}
+
+const onProgress = (done: number, total: number) => {
+  importProgress = done / total;
+  const bar = app.querySelector<HTMLDivElement>(".progress > div");
+  if (bar) bar.style.width = `${Math.round(importProgress * 100)}%`;
+};
+
 async function importFile(file: File) {
   importProgress = 0;
-  await run("import", async () => {
-    const book = await importBook(file, (done, total) => {
-      importProgress = done / total;
-      const bar = app.querySelector<HTMLDivElement>(".progress > div");
-      if (bar) bar.style.width = `${Math.round(importProgress * 100)}%`;
-    });
-    if (book.emptyPages > book.pageCount * 0.5) {
-      throw new Error(`Most pages (${book.emptyPages} of ${book.pageCount}) have no text layer. This looks like a scanned PDF; run it through OCR first.`);
-    }
-    await putBook(book);
-    void navigator.storage?.persist?.();
-    books = await listBooks();
-    view = { name: "book", book, state: await getState(book.id), tab: "ask" };
-  });
+  await run("import", async () => finishImport(await importBook(file, onProgress)));
+}
+
+async function importLink(url: string) {
+  if (!url.trim()) {
+    lastError = "Paste a link first.";
+    return render();
+  }
+  importProgress = 0;
+  await run("import", async () => finishImport(await importUrl(url, settings.relayUrl, onProgress)));
 }
 
 // ---------- settings ----------
 function renderSettings(): Child[] {
   const key = h("input", { type: "password", value: settings.apiKey, placeholder: "sk-ant-…", autocomplete: "off" });
   const economy = h("input", { type: "checkbox", checked: settings.economy });
+  const relay = h("input", { type: "text", inputMode: "url", value: settings.relayUrl, placeholder: "https://skillbook-relay.your-name.workers.dev", autocomplete: "off" });
   const model = h(
     "select",
     {},
@@ -227,12 +256,14 @@ function renderSettings(): Child[] {
         economy,
         h("span", {}, "Economy extraction: run Extract through the Batch API at half price. Results usually take minutes but can take hours; you can close the app meanwhile."),
       ),
+      h("label", { class: "field" }, h("span", {}, "Web import relay (optional)"), relay),
+      h("p", { class: "muted" }, "Only needed to import web books from a link. It's a small Cloudflare Worker you deploy to your own account; see proxy/README.md in the repository. It relays only the sites you allow."),
       h(
         "button",
         {
           class: "primary",
           onclick: () => {
-            settings = { apiKey: key.value.trim(), model: model.value as ModelId, economy: economy.checked };
+            settings = { apiKey: key.value.trim(), model: model.value as ModelId, economy: economy.checked, relayUrl: relay.value.trim() };
             saveSettings(settings);
             void go({ name: "library" });
           },
@@ -250,7 +281,19 @@ function renderBook(v: BookView): Child[] {
     h("button", { role: "tab", "aria-selected": String(v.tab === t), onclick: () => ((v.tab = t), (lastError = ""), render()) }, label);
   return [
     h("header", { class: "bar" }, h("button", { class: "ghost", onclick: () => go({ name: "library" }) }, "‹"), h("h1", {}, v.book.title)),
-    h("p", { class: "muted" }, `${v.book.pageCount} ${unitNoun(v.book)} · ${v.book.sections.length} sections · ~${fmtK(tokens)} tokens sent to Claude`),
+    h(
+      "p",
+      { class: "muted" },
+      `${count(v.book.pageCount, unitNoun(v.book))} · ${count(v.book.sections.length, "sections")} · ~${fmtK(tokens)} tokens sent to Claude`,
+      v.book.sourceUrl && [" · ", h("a", { href: v.book.sourceUrl, target: "_blank", rel: "noopener noreferrer" }, "source")],
+    ),
+    importNotes.length > 0 &&
+      h(
+        "div",
+        { class: "notice" },
+        importNotes.map((n) => h("p", {}, n)),
+        h("button", { class: "ghost", onclick: () => ((importNotes = []), render()) }, "Dismiss"),
+      ),
     renderSections(v),
     tokens > 900_000 && h("div", { class: "notice" }, "This book is close to or over Claude's 1M-token context window. Requests may fail."),
     h("nav", { class: "tabs", role: "tablist" }, tab("ask", "Ask"), tab("extract", "Extract"), tab("skill", "Skill")),
@@ -596,6 +639,13 @@ function renderSkill(v: BookView): Child[] {
         h("label", { class: "field" }, h("span", {}, "Revise: describe the change and Claude edits only that part"), instruction),
         h("button", { class: "primary", disabled: !!busy, onclick: revise }, busy === "revise" ? "Revising…" : "Revise"),
         busy === "revise" && working("Claude is revising…"),
+      ),
+    v.book.sourceUrl &&
+      h(
+        "p",
+        { class: "muted" },
+        "This book came from the web. Check its licence before sharing a skill built from it; many allow personal use only. ",
+        h("a", { href: v.book.sourceUrl, target: "_blank", rel: "noopener noreferrer" }, "Open source"),
       ),
     errorLine(),
     usageLine(),

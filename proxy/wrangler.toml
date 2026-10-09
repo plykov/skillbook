@@ -1,0 +1,10 @@
+# Deploy with: npx wrangler deploy   (run inside this folder)
+name = "skillbook-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Where the app is served from (comma-separate more, e.g. for local testing).
+ALLOWED_ORIGIN = "https://plykov.github.io"
+# The only sites this relay will fetch. "*.example.com" allows subdomains.
+ALLOWED_HOSTS = "library.sevenfigurecreators.com"

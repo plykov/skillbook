@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildSections, locatorOf, pageLabel, unitNoun } from "../src/book";
-import { chunkPages, fragmentOf, hasDrm, layoutEpub, resolveHref } from "../src/epub";
+import { buildSections, chunkPages, count, locatorOf, pageLabel, unitNoun } from "../src/book";
+import { fragmentOf, hasDrm, layoutEpub, resolveHref } from "../src/epub";
 
 describe("resolveHref", () => {
   it("resolves relative paths against the containing file", () => {
@@ -117,5 +117,9 @@ describe("locations", () => {
     expect(locatorOf({})).toBe("page");
     expect(unitNoun({ format: "epub" })).toBe("locations");
     expect(unitNoun({ format: "pdf" })).toBe("pages");
+    expect(unitNoun({ format: "web" })).toBe("locations");
+    expect(unitNoun({ format: "text" })).toBe("locations");
+    expect(count(1, "locations")).toBe("1 location");
+    expect(count(3, "sections")).toBe("3 sections");
   });
 });

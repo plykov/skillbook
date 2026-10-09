@@ -30,6 +30,8 @@ export interface Settings {
   model: ModelId;
   /** Run Extract through the Message Batches API (50% off, slower). */
   economy: boolean;
+  /** Address of the user's relay for fetching web books (see proxy/). Not used for Claude calls. */
+  relayUrl: string;
 }
 
 export interface Usage {
